@@ -166,6 +166,19 @@ struct fts_ts_data {
 	u8 gesture_mode_type;
     bool power_disabled;
     bool systemui_skiptouch_eable;
+    bool gesture_mode_m;
+    bool gesture_mode_e;
+    bool gesture_mode_s;
+    bool gesture_mode_v;
+    bool gesture_mode_w;
+    bool gesture_mode_z;
+    u8 gesture_type;        /* 8 bit: music_control V Z M e S W Main_Switch Start*/
+    u8 gesture_type_m;
+    u8 gesture_type_e;
+    u8 gesture_type_s;
+    u8 gesture_type_v;
+    u8 gesture_type_w;
+    u8 gesture_type_z;        /* 8 bit: music_control V Z M e S W Main_Switch End*/
     /* multi-touch */
     struct extcon_dev *touch_edev;
     struct ts_event *events;
