@@ -1081,12 +1081,16 @@ int get_chipset_version(void)
 int bt_disable_asd(void)
 {
 	int rc = 0;
+
+#ifndef ASUS_ZS661KS_PROJECT
 	if (bt_power_pdata->bt_vdd_asd) {
 		BT_PWR_INFO("Disabling ASD regulator");
 		rc = bt_vreg_disable(bt_power_pdata->bt_vdd_asd);
 	} else {
 		BT_PWR_INFO("ASD regulator is not configured");
 	}
+#endif
+
 	return rc;
 }
 
@@ -1206,8 +1210,10 @@ static long bt_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			bt_power_pdata->bt_vdd_rfa1);
 		set_pwr_srcs_status(BT_VDD_RFA2_LDO_CURRENT,
 			bt_power_pdata->bt_vdd_rfa2);
+#ifndef ASUS_ZS661KS_PROJECT
 		set_pwr_srcs_status(BT_VDD_ASD_LDO_CURRENT,
 			bt_power_pdata->bt_vdd_asd);
+#endif
 		set_pwr_srcs_status(BT_VDD_IO_LDO_CURRENT,
 			bt_power_pdata->bt_vdd_io);
 		set_pwr_srcs_status(BT_VDD_XTAL_LDO_CURRENT,
