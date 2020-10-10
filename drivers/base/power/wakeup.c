@@ -1038,7 +1038,6 @@ void pm_system_irq_wakeup(unsigned int irq_number)
 		//pr_warn("%s: %d triggered %s\n", __func__, irq_number, name);
 		//              irq_number, name);
 		ASUSEvtlog("[PM] IRQs triggered: %d %s\n", irq_number, name);
-		log_wakeup_reason(irq_number);
 		pm_pwrcs_ret = 0; //Don't print gic_show_resume_irq to ASUSEvtlog if here already shows
 
 		pm_wakeup_irq = irq_number;
