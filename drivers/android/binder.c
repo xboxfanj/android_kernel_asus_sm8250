@@ -81,12 +81,6 @@
 #include "binder_internal.h"
 #include "binder_trace.h"
 
-#ifdef CONFIG_CGF_NOTIFY_EVENT
-#include <linux/cgroup.h>
-#include <linux/notifier.h>
-
-#endif
-
 static HLIST_HEAD(binder_deferred_list);
 static DEFINE_MUTEX(binder_deferred_lock);
 
@@ -2962,9 +2956,6 @@ static void binder_transaction(struct binder_proc *proc,
 	int t_debug_id = atomic_inc_return(&binder_last_id);
 	char *secctx = NULL;
 	u32 secctx_sz = 0;
-/*#ifdef CONFIG_CGF_NOTIFY_EVENT
-	struct cgf_event event;
-#endif*/
 	e = binder_transaction_log_add(&binder_transaction_log);
 	e->debug_id = t_debug_id;
 	e->call_type = reply ? 2 : !!(tr->flags & TF_ONE_WAY);
@@ -3196,23 +3187,6 @@ static void binder_transaction(struct binder_proc *proc,
 		t->from = thread;
 	else
 		t->from = NULL;
-
-/*#ifdef CONFIG_CGF_NOTIFY_EVENT
-	//	struct cgf_event event;
-	if (frozen(target_proc->tsk) || freezing(target_proc->tsk)){
-		event.type = 0;
-		event.info = target_proc->tsk->signal;
-		event.data = target_proc->tsk;
-		//printk(KERN_ERR"[CGF] %s, target_proc->tsk->pid: %d\n", __func__, target_proc->tsk->pid);
-		cgf_notifier_call_chain(0, &event);
-        //event.type = 1;
-		//event.info = target_thread->task->signal;
-		//event.data = target_thread->task;
-		//printk(KERN_ERR"[CGF] %s, target_proc->tsk->pid: %d\n", __func__, target_proc->tsk->pid);
-		//cgf_notifier_call_chain(0, &event);		
-	}
-#endif	*/
-
 
 	t->sender_euid = task_euid(proc->tsk);
 	t->to_proc = target_proc;
