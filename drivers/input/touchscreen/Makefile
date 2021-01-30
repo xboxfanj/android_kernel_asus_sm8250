@@ -115,3 +115,5 @@ obj-$(CONFIG_TOUCHSCREEN_SYNAPTICS_TCM)	+= synaptics_tcm/
 obj-$(CONFIG_TOUCHSCREEN_FTS)	+= focaltech_touch_ft8719/
 obj-$(CONFIG_TOUCHSCREEN_GOODIX_GTX8)	+= goodix_gtx8/
 obj-m	+= station_goodix_gtx8/
+#obj-$(CONFIG_TOUCHSCREEN_FTS)	+= focaltech_touch/
+obj-$(CONFIG_TOUCHSCREEN_NT36XXX)	+= nt36xxx/

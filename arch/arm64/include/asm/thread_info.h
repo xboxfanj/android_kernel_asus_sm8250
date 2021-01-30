@@ -47,6 +47,9 @@ struct thread_info {
        struct mutex *          pWaitingMutex;          //ASUS_BSP + [thomas]Add for slow log
        struct completion *     pWaitingCompletion;     //ASUS_BSP + [thomas]Add for slow log
        struct rt_mutex *       pWaitingRTMutex;        //ASUS_BSP + [thomas]Add for slow log
+#ifdef CONFIG_SHADOW_CALL_STACK
+	void			*shadow_call_stack;
+#endif
 };
 
 #define thread_saved_pc(tsk)	\
@@ -93,6 +96,7 @@ void arch_release_task_struct(struct task_struct *tsk);
 #define TIF_SVE			23	/* Scalable Vector Extension in use */
 #define TIF_SVE_VL_INHERIT	24	/* Inherit sve_vl_onexec across exec */
 #define TIF_SSBD		25	/* Wants SSB mitigation */
+#define TIF_TAGGED_ADDR		26	/* Allow tagged user addresses */
 
 #define _TIF_SIGPENDING		(1 << TIF_SIGPENDING)
 #define _TIF_NEED_RESCHED	(1 << TIF_NEED_RESCHED)
@@ -105,6 +109,7 @@ void arch_release_task_struct(struct task_struct *tsk);
 #define _TIF_SECCOMP		(1 << TIF_SECCOMP)
 #define _TIF_UPROBE		(1 << TIF_UPROBE)
 #define _TIF_FSCHECK		(1 << TIF_FSCHECK)
+#define _TIF_SINGLESTEP		(1 << TIF_SINGLESTEP)
 #define _TIF_32BIT		(1 << TIF_32BIT)
 #define _TIF_SVE		(1 << TIF_SVE)
 

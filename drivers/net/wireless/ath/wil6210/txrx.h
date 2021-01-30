@@ -1,12 +1,13 @@
 /* SPDX-License-Identifier: ISC */
 /*
  * Copyright (c) 2012-2016 Qualcomm Atheros, Inc.
- * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2018-2020, The Linux Foundation. All rights reserved.
  */
 
 #ifndef WIL6210_TXRX_H
 #define WIL6210_TXRX_H
 
+#include <net/ieee80211_radiotap.h>
 #include "wil6210.h"
 #include "txrx_edma.h"
 
@@ -491,6 +492,20 @@ struct packet_rx_info {
 	u8 cid;
 };
 
+struct wil6210_rtap {
+	struct ieee80211_radiotap_header rthdr;
+	/* fields should be in the order of bits in rthdr.it_present */
+	/* flags */
+	u8 flags;
+	/* channel */
+	__le16 chnl_freq __aligned(2);
+	__le16 chnl_flags;
+	/* MCS */
+	u8 mcs_present;
+	u8 mcs_flags;
+	u8 mcs_index;
+} __packed;
+
 /* this struct will be stored in the skb cb buffer
  * max length of the struct is limited to 48 bytes
  */
@@ -693,8 +708,8 @@ void wil_tid_ampdu_rx_free(struct wil6210_priv *wil,
 void wil_tx_data_init(const struct wil6210_priv *wil,
 		      struct wil_ring_tx_data *txdata);
 void wil_init_txrx_ops_legacy_dma(struct wil6210_priv *wil);
-void wil_tx_latency_calc(struct wil6210_priv *wil, struct sk_buff *skb,
-			 struct wil_sta_info *sta);
+int wil_tx_latency_calc_common(struct wil6210_priv *wil, struct sk_buff *skb,
+			       struct wil_sta_info *sta);
 int wil_get_cid_by_ring(struct wil6210_priv *wil, struct wil_ring *ring);
 bool wil_is_special_packet(const struct sk_buff *skb);
 

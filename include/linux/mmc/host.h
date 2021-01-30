@@ -199,6 +199,8 @@ struct mmc_host_ops {
 					 unsigned int max_dtr, int host_drv,
 					 int card_drv, int *drv_type);
 	void	(*hw_reset)(struct mmc_host *host);
+	void    (*enter_dbg_mode)(struct mmc_host *host);
+	void    (*exit_dbg_mode)(struct mmc_host *host);
 	void	(*card_event)(struct mmc_host *host);
 
 	/*
@@ -258,6 +260,13 @@ struct mmc_cqe_ops {
 	 * will have zero data bytes transferred.
 	 */
 	void	(*cqe_recovery_finish)(struct mmc_host *host);
+	/*
+	 * Update the request queue with keyslot manager details. This keyslot
+	 * manager will be used by block crypto to configure the crypto Engine
+	 * for data encryption.
+	 */
+	void	(*cqe_crypto_update_queue)(struct mmc_host *host,
+					struct request_queue *queue);
 };
 
 struct mmc_async_req {
@@ -438,6 +447,7 @@ struct mmc_host {
 				 MMC_CAP_UHS_SDR50 | MMC_CAP_UHS_SDR104 | \
 				 MMC_CAP_UHS_DDR50)
 /* (1 << 21) is free for reuse */
+#define MMC_CAP_NEED_RSP_BUSY	(1 << 22)	/* Commands with R1B can't use R1. */
 #define MMC_CAP_DRIVER_TYPE_A	(1 << 23)	/* Host supports Driver Type A */
 #define MMC_CAP_DRIVER_TYPE_C	(1 << 24)	/* Host supports Driver Type C */
 #define MMC_CAP_DRIVER_TYPE_D	(1 << 25)	/* Host supports Driver Type D */
@@ -450,6 +460,7 @@ struct mmc_host {
 	u32			caps2;		/* More host capabilities */
 
 #define MMC_CAP2_BOOTPART_NOACC	(1 << 0)	/* Boot partition no access */
+#define MMC_CAP2_CRYPTO         (1 << 1)	/* Host supports inline encryption */
 #define MMC_CAP2_FULL_PWR_CYCLE	(1 << 2)	/* Can do full power cycle */
 #define MMC_CAP2_HS200_1_8V_SDR	(1 << 5)        /* can support */
 #define MMC_CAP2_HS200_1_2V_SDR	(1 << 6)        /* can support */
@@ -488,22 +499,10 @@ struct mmc_host {
 /* Some hosts need additional tuning */
 #define MMC_CAP2_HS400_POST_TUNING      (1 << 30)
 #define MMC_CAP2_SANITIZE       (1 << 31)               /* Support Sanitize */
+
 	int			fixed_drv_type;	/* fixed driver type for non-removable media */
 
 	mmc_pm_flag_t		pm_caps;	/* supported pm features */
-
-#ifdef CONFIG_MMC_CLKGATE
-	int			clk_requests;	/* internal reference counter */
-	unsigned int		clk_delay;	/* number MCI clk hold cycles */
-	bool			clk_gated;	/* clock gated */
-	struct workqueue_struct *clk_gate_wq;	/* clock gate work queue */
-	struct delayed_work	clk_gate_work; /* delayed clock gate */
-	unsigned int		clk_old;	/* old clock value cache */
-	spinlock_t		clk_lock;	/* lock for clk fields */
-	struct mutex		clk_gate_mutex;	/* mutex for clock gating */
-	struct device_attribute clkgate_delay_attr;
-	unsigned long           clkgate_delay;
-#endif
 
 	/* host specific block data */
 	unsigned int		max_seg_size;	/* see blk_queue_max_segment_size */
@@ -600,6 +599,9 @@ struct mmc_host {
 	int			cqe_qdepth;
 	bool			cqe_enabled;
 	bool			cqe_on;
+#ifdef CONFIG_MMC_CRYPTO
+	struct keyslot_manager	*ksm;
+#endif /* CONFIG_MMC_CRYPTO */
 
 	/*
 	 * Set to 1 to just stop the SDCLK to the card without
@@ -630,6 +632,7 @@ struct mmc_host {
 	bool inlinecrypt_reset_needed;  /* Inline crypto reset */
 
 	bool crash_on_err;	/* crash the system on error */
+	bool need_hw_reset;
 	atomic_t active_reqs;
 	unsigned long		private[0] ____cacheline_aligned;
 };
@@ -773,26 +776,6 @@ static inline void mmc_host_set_sdr104(struct mmc_host *host)
 {
 	host->caps |= MMC_CAP_UHS_SDR104;
 }
-
-#ifdef CONFIG_MMC_CLKGATE
-void mmc_host_clk_hold(struct mmc_host *host);
-void mmc_host_clk_release(struct mmc_host *host);
-unsigned int mmc_host_clk_rate(struct mmc_host *host);
-
-#else
-static inline void mmc_host_clk_hold(struct mmc_host *host)
-{
-}
-
-static inline void mmc_host_clk_release(struct mmc_host *host)
-{
-}
-
-static inline unsigned int mmc_host_clk_rate(struct mmc_host *host)
-{
-	return host->ios.clock;
-}
-#endif
 
 static inline int mmc_card_hs(struct mmc_card *card)
 {

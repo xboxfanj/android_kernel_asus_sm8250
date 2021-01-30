@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
  */
 
 #ifndef __NQ_NCI_H
@@ -27,7 +27,12 @@
 #define DEV_COUNT			1
 #define DEVICE_NAME			"nq-nci"
 #define CLASS_NAME			"nqx"
-#define MAX_BUFFER_SIZE			(320)
+/*
+ * From MW 11.04 buffer size increased to support
+ * frame size of 554 in FW download mode
+ * Frame len(2) + Frame Header(6) + DATA(512) + HASH(32) + CRC(2) + RFU(4)
+ */
+#define MAX_BUFFER_SIZE			(558)
 #define WAKEUP_SRC_TIMEOUT		(2000)
 #define NCI_HEADER_LEN			3
 #define NCI_PAYLOAD_IDX			3
@@ -35,8 +40,17 @@
 #define NCI_RESET_CMD_LEN		4
 #define NCI_RESET_RSP_LEN		4
 #define NCI_RESET_NTF_LEN		13
+#define NCI_INIT_CMD_LEN		3
+#define NCI_INIT_RSP_LEN		28
 #define NCI_GET_VERSION_CMD_LEN		8
 #define NCI_GET_VERSION_RSP_LEN		12
+#define NCI_1_0_RESET_RSP_PAYLOAD_LEN	3
+#define NCI_PAYLOAD_START_INDEX		3
+#define NCI_PAYLOAD_LENGTH_INDEX	(NCI_PAYLOAD_START_INDEX - 1)
+#define NFCC_HW_CHIP_ID_OFFSET		4
+#define NFCC_HW_ROM_VER_OFFSET		3
+#define NFCC_HW_MAJOR_NO_OFFSET		2
+#define NFCC_HW_MINOR_NO_OFFSET		1
 #define MAX_IRQ_WAIT_TIME		(90)	//in ms
 #define COLD_RESET_CMD_LEN		3
 #define COLD_RESET_RSP_LEN		4
@@ -50,6 +64,15 @@
 #define PAYLOAD_LENGTH_MAX		(256)
 #define BYTE				(0x8)
 #define NCI_IDENTIFIER			(0x10)
+#define NFC_LDO_SUPPLY_DT_NAME		"qcom,nq-vdd-1p8"
+#define NFC_LDO_SUPPLY_NAME		"qcom,nq-vdd-1p8-supply"
+#define NFC_LDO_VOL_DT_NAME		"qcom,nq-vdd-1p8-voltage"
+#define NFC_LDO_CUR_DT_NAME		"qcom,nq-vdd-1p8-current"
+
+//as per SN1x0 datasheet
+#define NFC_VDDIO_MIN			1650000 //in uV
+#define NFC_VDDIO_MAX			1950000 //in uV
+#define NFC_CURRENT_MAX			157000 //in uA
 
 enum ese_ioctl_request {
 	/* eSE POWER ON */

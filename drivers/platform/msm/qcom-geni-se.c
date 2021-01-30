@@ -357,9 +357,12 @@ static int geni_se_select_dma_mode(void __iomem *base)
 	geni_write_reg(0xFFFFFFFF, base, SE_IRQ_EN);
 
 	common_geni_m_irq_en = geni_read_reg(base, SE_GENI_M_IRQ_EN);
-	if (proto != UART)
+	if (proto != UART) {
 		common_geni_m_irq_en &=
 			~(M_TX_FIFO_WATERMARK_EN | M_RX_FIFO_WATERMARK_EN);
+		if (proto != I3C)
+			common_geni_m_irq_en &= ~M_CMD_DONE_EN;
+	}
 
 	geni_write_reg(common_geni_m_irq_en, base, SE_GENI_M_IRQ_EN);
 	geni_dma_mode = geni_read_reg(base, SE_GENI_DMA_MODE_EN);
@@ -478,6 +481,14 @@ EXPORT_SYMBOL(geni_setup_s_cmd);
  */
 void geni_cancel_m_cmd(void __iomem *base)
 {
+	unsigned int common_geni_m_irq_en;
+	int proto = get_se_proto(base);
+
+	if (proto != UART && proto != I3C) {
+		common_geni_m_irq_en = geni_read_reg(base, SE_GENI_M_IRQ_EN);
+		common_geni_m_irq_en &= ~M_CMD_DONE_EN;
+		geni_write_reg(common_geni_m_irq_en, base, SE_GENI_M_IRQ_EN);
+	}
 	geni_write_reg(M_GENI_CMD_CANCEL, base, SE_GENI_M_CMD_CTRL_REG);
 }
 EXPORT_SYMBOL(geni_cancel_m_cmd);
@@ -1565,7 +1576,8 @@ void geni_se_dump_dbg_regs(struct se_geni_rsc *rsc, void __iomem *base,
 					geni_se_dev->bus_bw_noc)))
 		return;
 	if (unlikely(list_empty(&rsc->ab_list) || list_empty(&rsc->ib_list))) {
-		GENI_SE_DBG(ipc, false, NULL, "%s: Clocks not on\n", __func__);
+		GENI_SE_ERR(ipc, true, rsc->ctrl_dev, "%s: Clocks not on\n",
+								__func__);
 		return;
 	}
 	m_cmd0 = geni_read_reg(base, SE_GENI_M_CMD0);
@@ -1585,16 +1597,16 @@ void geni_se_dump_dbg_regs(struct se_geni_rsc *rsc, void __iomem *base,
 	se_dma_tx_len = geni_read_reg(base, SE_DMA_TX_LEN);
 	se_dma_tx_len_in = geni_read_reg(base, SE_DMA_TX_LEN_IN);
 
-	GENI_SE_DBG(ipc, false, NULL,
-	"%s: m_cmd0:0x%x, m_irq_status:0x%x, geni_status:0x%x, geni_ios:0x%x\n",
-	__func__, m_cmd0, m_irq_status, geni_status, geni_ios);
-	GENI_SE_DBG(ipc, false, NULL,
+	GENI_SE_ERR(ipc, true, rsc->ctrl_dev,
+	"%s: m_cmd0:0x%x, m_irq_status:0x%x, s_irq_status:0x%x, geni_status:0x%x, geni_ios:0x%x\n",
+	__func__, m_cmd0, m_irq_status, s_irq_status, geni_status, geni_ios);
+	GENI_SE_ERR(ipc, true, rsc->ctrl_dev,
 	"dma_rx_irq:0x%x, dma_tx_irq:0x%x, rx_fifo_sts:0x%x, tx_fifo_sts:0x%x\n"
 	, dma_rx_irq, dma_tx_irq, rx_fifo_status, tx_fifo_status);
-	GENI_SE_DBG(ipc, false, NULL,
+	GENI_SE_ERR(ipc, true, rsc->ctrl_dev,
 	"se_dma_dbg:0x%x, m_cmd_ctrl:0x%x, dma_rxlen:0x%x, dma_rxlen_in:0x%x\n",
 	se_dma_dbg, m_cmd_ctrl, se_dma_rx_len, se_dma_rx_len_in);
-	GENI_SE_DBG(ipc, false, NULL,
+	GENI_SE_ERR(ipc, true, rsc->ctrl_dev,
 	"dma_txlen:0x%x, dma_txlen_in:0x%x\n", se_dma_tx_len, se_dma_tx_len_in);
 }
 EXPORT_SYMBOL(geni_se_dump_dbg_regs);

@@ -16,7 +16,6 @@
 #include <linux/wait.h>
 #include <linux/mhi.h>
 #include "mhi_internal.h"
-#include <soc/qcom/subsystem_restart.h>
 
 static void mhi_process_sfr(struct mhi_controller *mhi_cntrl,
 	struct file_info *info)
@@ -60,7 +59,6 @@ static void mhi_process_sfr(struct mhi_controller *mhi_cntrl,
 
 	/* force sfr string to log in kernel msg */
 	MHI_ERR("%s\n", sfr_buf);
-	subsys_save_reason("wlan", sfr_buf );
 err:
 	kfree(sfr_buf);
 }
@@ -277,6 +275,10 @@ int mhi_download_rddm_img(struct mhi_controller *mhi_cntrl, bool in_panic)
 {
 	void __iomem *base = mhi_cntrl->bhie;
 	u32 rx_status;
+
+	/* device supports RDDM but controller wants to skip ramdumps */
+	if (!mhi_cntrl->rddm_supported || !mhi_cntrl->rddm_image)
+		return -EINVAL;
 
 	if (in_panic)
 		return __mhi_download_rddm_in_panic(mhi_cntrl);
@@ -575,8 +577,21 @@ void mhi_fw_load_handler(struct mhi_controller *mhi_cntrl)
 
 	ret = request_firmware(&firmware, fw_name, mhi_cntrl->dev);
 	if (ret) {
-		MHI_CNTRL_ERR("Error loading firmware, ret:%d\n", ret);
-		return;
+		if (!mhi_cntrl->fw_image_fallback) {
+			MHI_ERR("Error loading fw, ret:%d\n", ret);
+			return;
+		}
+
+		/* re-try with fall back fw image */
+		ret = request_firmware(&firmware, mhi_cntrl->fw_image_fallback,
+				mhi_cntrl->dev);
+		if (ret) {
+			MHI_ERR("Error loading fw_fb, ret:%d\n", ret);
+			return;
+		}
+
+		mhi_cntrl->status_cb(mhi_cntrl, mhi_cntrl->priv_data,
+				     MHI_CB_FW_FALLBACK_IMG);
 	}
 
 	size = (mhi_cntrl->fbc_download) ? mhi_cntrl->sbl_size : firmware->size;
@@ -597,12 +612,9 @@ void mhi_fw_load_handler(struct mhi_controller *mhi_cntrl)
 	ret = mhi_fw_load_sbl(mhi_cntrl, dma_addr, size);
 	mhi_free_coherent(mhi_cntrl, size, buf, dma_addr);
 
-	if (!mhi_cntrl->fbc_download || ret || mhi_cntrl->ee == MHI_EE_EDL)
-		release_firmware(firmware);
-
 	/* error or in edl, we're done */
 	if (ret || mhi_cntrl->ee == MHI_EE_EDL)
-		return;
+		goto release_fw;
 
 	write_lock_irq(&mhi_cntrl->pm_lock);
 	mhi_cntrl->dev_state = MHI_STATE_RESET;
@@ -617,7 +629,7 @@ void mhi_fw_load_handler(struct mhi_controller *mhi_cntrl)
 					   firmware->size);
 		if (ret) {
 			MHI_CNTRL_ERR("Error alloc size:%zu\n", firmware->size);
-			goto error_alloc_fw_table;
+			goto release_fw;
 		}
 
 		MHI_CNTRL_LOG("Copying firmware image into vector table\n");
@@ -636,7 +648,7 @@ fw_load_ee_pthru:
 			TO_MHI_EXEC_STR(mhi_cntrl->ee), ret);
 
 	if (!mhi_cntrl->fbc_download)
-		return;
+		goto release_fw;
 
 	if (ret) {
 		MHI_CNTRL_ERR("Did not transition to READY state\n");
@@ -651,6 +663,8 @@ fw_load_ee_pthru:
 
 	if (!ret || MHI_PM_IN_ERROR_STATE(mhi_cntrl->pm_state)) {
 		MHI_CNTRL_ERR("MHI did not enter BHIE\n");
+		mhi_cntrl->status_cb(mhi_cntrl, mhi_cntrl->priv_data,
+				     MHI_CB_BOOTUP_TIMEOUT);
 		goto error_read;
 	}
 
@@ -659,6 +673,11 @@ fw_load_ee_pthru:
 	ret = mhi_fw_load_amss(mhi_cntrl,
 			       /* last entry is vec table */
 			       &image_info->mhi_buf[image_info->entries - 1]);
+
+	if (ret) {
+		mhi_cntrl->status_cb(mhi_cntrl, mhi_cntrl->priv_data,
+				     MHI_CB_BOOTUP_TIMEOUT);
+	}
 
 	MHI_CNTRL_LOG("amss fw_load ret:%d\n", ret);
 
@@ -669,6 +688,13 @@ fw_load_ee_pthru:
 error_read:
 	mhi_free_bhie_table(mhi_cntrl, &mhi_cntrl->fbc_image);
 
-error_alloc_fw_table:
+release_fw:
 	release_firmware(firmware);
+}
+
+void mhi_perform_soc_reset(struct mhi_controller *mhi_cntrl)
+{
+	mhi_cntrl->write_reg(mhi_cntrl, mhi_cntrl->regs,
+			     MHI_SOC_RESET_REQ_OFFSET,
+			     MHI_SOC_RESET_REQ);
 }

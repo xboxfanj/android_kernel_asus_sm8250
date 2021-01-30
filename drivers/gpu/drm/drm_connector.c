@@ -256,9 +256,7 @@ int drm_connector_init(struct drm_device *dev,
 
 	if (connector_type != DRM_MODE_CONNECTOR_VIRTUAL &&
 	    connector_type != DRM_MODE_CONNECTOR_WRITEBACK)
-		drm_object_attach_property(&connector->base,
-					      config->edid_property,
-					      0);
+		drm_connector_attach_edid_property(connector);
 
 	drm_object_attach_property(&connector->base,
 				      config->dpms_property, 0);
@@ -289,6 +287,25 @@ out_put:
 	return ret;
 }
 EXPORT_SYMBOL(drm_connector_init);
+
+/**
+ * drm_connector_attach_edid_property - attach edid property.
+ * @dev: DRM device
+ * @connector: the connector
+ *
+ * Some connector types like DRM_MODE_CONNECTOR_VIRTUAL do not get a
+ * edid property attached by default.  This function can be used to
+ * explicitly enable the edid property in these cases.
+ */
+void drm_connector_attach_edid_property(struct drm_connector *connector)
+{
+	struct drm_mode_config *config = &connector->dev->mode_config;
+
+	drm_object_attach_property(&connector->base,
+				   config->edid_property,
+				   0);
+}
+EXPORT_SYMBOL(drm_connector_attach_edid_property);
 
 /**
  * drm_connector_attach_encoder - attach a connector to an encoder
@@ -843,8 +860,8 @@ static const struct drm_prop_enum_list dp_colorspaces[] = {
 	{ DRM_MODE_COLORIMETRY_OPRGB, "opRGB" },
 	{ DRM_MODE_COLORIMETRY_DCI_P3_RGB_D65, "DCI-P3_RGB_D65" },
 	/* DP MSA Colorimetry */
-	{ DRM_MODE_DP_COLORIMETRY_BT601_YCC, "BT601_YCC" },
-	{ DRM_MODE_DP_COLORIMETRY_BT709_YCC, "BT709_YCC" },
+	{ DRM_MODE_DP_COLORIMETRY_BT601_YCC, "YCBCR_ITU_601" },
+	{ DRM_MODE_DP_COLORIMETRY_BT709_YCC, "YCBCR_ITU_709" },
 	{ DRM_MODE_DP_COLORIMETRY_SRGB, "sRGB" },
 	{ DRM_MODE_DP_COLORIMETRY_RGB_WIDE_GAMUT, "RGB Wide Gamut" },
 	{ DRM_MODE_DP_COLORIMETRY_SCRGB, "scRGB" },
@@ -1463,7 +1480,7 @@ int drm_mode_create_colorspace_property(struct drm_connector *connector)
 		if (!prop)
 			return -ENOMEM;
 	} else if (connector->connector_type == DRM_MODE_CONNECTOR_eDP ||
-		connector->connector_type == DRM_MODE_CONNECTOR_DisplayPort) {
+		   connector->connector_type == DRM_MODE_CONNECTOR_DisplayPort) {
 		prop = drm_property_create_enum(dev, DRM_MODE_PROP_ENUM,
 						"Colorspace", dp_colorspaces,
 						ARRAY_SIZE(dp_colorspaces));

@@ -1556,6 +1556,9 @@ static int cti_probe(struct amba_device *adev, const struct amba_id *id)
 			cpu_pm_register_notifier(&cti_cpu_pm_notifier);
 		registered++;
 	}
+	ctidevid = cti_readl(drvdata, DEVID);
+	drvdata->trig_num_max = (ctidevid & GENMASK(15, 8)) >> 8;
+	drvdata->ch_num_max = (ctidevid & GENMASK(21, 16)) >> 16;
 	pm_runtime_put(&adev->dev);
 	ctidevid = cti_readl(drvdata, DEVID);
 	drvdata->trig_num_max = (ctidevid & GENMASK(15, 8)) >> 8;

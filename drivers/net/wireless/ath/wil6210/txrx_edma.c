@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: ISC
 /*
- * Copyright (c) 2012-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2020 The Linux Foundation. All rights reserved.
  */
 
 #include <linux/etherdevice.h>
 #include <linux/moduleparam.h>
+#include <net/ieee80211_radiotap.h>
+#include <linux/if_arp.h>
 #include <linux/prefetch.h>
 #include <linux/types.h>
 #include <linux/list.h>
@@ -181,17 +183,20 @@ static int wil_ring_alloc_skb_edma(struct wil6210_priv *wil,
 	struct wil_rx_enhanced_desc dd, *d = &dd;
 	struct wil_rx_enhanced_desc *_d = (struct wil_rx_enhanced_desc *)
 		&ring->va[i].rx.enhanced;
+	struct net_device *ndev = wil->main_ndev;
+	int headroom = ndev->type == ARPHRD_IEEE80211_RADIOTAP ?
+			WIL6210_RTAP_SIZE : headroom_size;
 
 	if (unlikely(list_empty(free))) {
 		wil->rx_buff_mgmt.free_list_empty_cnt++;
 		return -EAGAIN;
 	}
 
-	skb = dev_alloc_skb(sz + headroom_size);
+	skb = dev_alloc_skb(sz + headroom);
 	if (unlikely(!skb))
 		return -ENOMEM;
 
-	skb_reserve(skb, headroom_size);
+	skb_reserve(skb, headroom);
 	skb_put(skb, sz);
 
 	/**
@@ -902,6 +907,48 @@ static int wil_rx_error_check_edma(struct wil6210_priv *wil,
 	return 0;
 }
 
+/**
+ * Adds radiotap header
+ *
+ * Any error indicated as "Bad FCS"
+ */
+static void wil_rx_add_radiotap_header_edma(struct wil6210_priv *wil,
+					    struct wil_rx_status_extended *s,
+					    struct sk_buff *skb)
+{
+	struct wil6210_rtap *rtap;
+	int rtap_len = sizeof(struct wil6210_rtap);
+	struct ieee80211_channel *ch = wil->monitor_chandef.chan;
+
+	if (skb_headroom(skb) < rtap_len &&
+	    pskb_expand_head(skb, rtap_len, 0, GFP_ATOMIC)) {
+		wil_err(wil, "Unable to expand headroom to %d\n", rtap_len);
+		return;
+	}
+
+#if defined(BACKPORT_HAS_SKB_PUT_PUSH_RETURN_VOID)
+	rtap = skb_push(skb, rtap_len);
+#else
+	rtap = (void *)skb_push(skb, rtap_len);
+#endif
+	memset(rtap, 0, rtap_len);
+
+	rtap->rthdr.it_version = PKTHDR_RADIOTAP_VERSION;
+	rtap->rthdr.it_len = cpu_to_le16(rtap_len);
+	rtap->rthdr.it_present = cpu_to_le32((1 << IEEE80211_RADIOTAP_FLAGS) |
+					(1 << IEEE80211_RADIOTAP_CHANNEL) |
+					(1 << IEEE80211_RADIOTAP_MCS));
+	if (wil_rx_status_get_error(s))
+		rtap->flags |= IEEE80211_RADIOTAP_F_BADFCS;
+
+	rtap->chnl_freq = cpu_to_le16(ch ? ch->center_freq : 58320);
+	rtap->chnl_flags = cpu_to_le16(0);
+
+	rtap->mcs_present = IEEE80211_RADIOTAP_MCS_HAVE_MCS;
+	rtap->mcs_flags = 0;
+	rtap->mcs_index = wil_rx_status_get_mcs(s);
+}
+
 static struct sk_buff *wil_sring_reap_rx_edma(struct wil6210_priv *wil,
 					      struct wil_status_ring *sring)
 {
@@ -922,6 +969,8 @@ static struct sk_buff *wil_sring_reap_rx_edma(struct wil6210_priv *wil,
 	u8 data_offset;
 	struct wil_rx_status_extended *s;
 	u16 sring_idx = sring - wil->srings;
+	struct net_device *ndev = wil->main_ndev;
+	struct wireless_dev *wdev = ndev->ieee80211_ptr;
 
 	BUILD_BUG_ON(sizeof(struct wil_rx_status_extended) > sizeof(skb->cb));
 
@@ -1011,13 +1060,6 @@ again:
 	}
 	stats = &wil->sta[cid].stats;
 
-	if (unlikely(dmalen < ETH_HLEN)) {
-		wil_dbg_txrx(wil, "Short frame, len = %d\n", dmalen);
-		stats->rx_short_frame++;
-		rxdata->skipping = true;
-		goto skipping;
-	}
-
 	if (unlikely(dmalen > sz)) {
 		wil_err(wil, "Rx size too large: %d bytes!\n", dmalen);
 		print_hex_dump(KERN_ERR, "RxS ", DUMP_PREFIX_OFFSET, 16, 1,
@@ -1026,6 +1068,17 @@ again:
 			       sizeof(struct wil_rx_status_extended), false);
 
 		stats->rx_large_frame++;
+		rxdata->skipping = true;
+		goto skipping;
+	}
+
+	/* no extra checks if in sniffer mode */
+	if (wdev->iftype == NL80211_IFTYPE_MONITOR)
+		goto skipping;
+
+	if (unlikely(dmalen < ETH_HLEN)) {
+		wil_dbg_txrx(wil, "Short frame, len = %d\n", dmalen);
+		stats->rx_short_frame++;
 		rxdata->skipping = true;
 	}
 
@@ -1106,6 +1159,10 @@ skipping:
 	wil_hex_dump_txrx("Rx ", DUMP_PREFIX_OFFSET, 16, 1,
 			  skb->data, skb_headlen(skb), false);
 
+	/* use radiotap header only if required */
+	if (ndev->type == ARPHRD_IEEE80211_RADIOTAP)
+		wil_rx_add_radiotap_header_edma(wil, msg, skb);
+
 	/* Has to be done after dma_unmap_single as skb->cb is also
 	 * used for holding the pa
 	 */
@@ -1122,6 +1179,7 @@ void wil_rx_handle_edma(struct wil6210_priv *wil, int *quota)
 	struct wil_status_ring *sring;
 	struct sk_buff *skb;
 	int i;
+	struct wireless_dev *wdev;
 
 	if (unlikely(!ring->va)) {
 		wil_err(wil, "Rx IRQ while Rx not yet initialized\n");
@@ -1155,6 +1213,14 @@ void wil_rx_handle_edma(struct wil6210_priv *wil, int *quota)
 					continue;
 				}
 				ndev = vif_to_ndev(vif);
+				wdev = ndev->ieee80211_ptr;
+				if (wdev->iftype == NL80211_IFTYPE_MONITOR) {
+					skb->dev = ndev;
+					skb_reset_mac_header(skb);
+					skb->ip_summed = CHECKSUM_UNNECESSARY;
+					skb->pkt_type = PACKET_OTHERHOST;
+					skb->protocol = htons(ETH_P_802_2);
+				}
 				wil_netif_rx_any(skb, ndev);
 			} else {
 				wil_rx_reorder(wil, skb);
@@ -1200,6 +1266,26 @@ wil_get_next_tx_status_msg(struct wil_status_ring *sring, u8 *dr_bit,
 	/* make sure dr_bit is read before the rest of status msg */
 	rmb();
 	*msg = *_msg;
+}
+
+static inline void wil_dump_tx_status(struct wil6210_priv *wil,
+				      struct wil_ring_tx_status *msg)
+{
+	wil_err(wil,
+		"Status Msg: num_desc: %d, ring_id: %d, status: %d, desc_ready: %d, timestamp: 0x%x, d2: 0x%x, seq_num: 0x%x, w7: 0x%x\n",
+		msg->num_descriptors, msg->ring_id, msg->status,
+		msg->desc_ready, msg->timestamp, msg->d2, msg->seq_number,
+		msg->w7);
+}
+
+static inline void
+wil_tx_latency_calc_edma(struct wil6210_priv *wil,
+			 struct sk_buff *skb,
+			 struct wil_sta_info *sta,
+			 struct wil_ring_tx_status *msg)
+{
+	if (wil_tx_latency_calc_common(wil, skb, sta))
+		wil_dump_tx_status(wil, msg);
 }
 
 /**
@@ -1305,11 +1391,16 @@ int wil_tx_sring_handler(struct wil6210_priv *wil,
 					ndev->stats.tx_packets++;
 					ndev->stats.tx_bytes += skb->len;
 					if (stats) {
+						struct wil_sta_info *sta;
+
 						stats->tx_packets++;
 						stats->tx_bytes += skb->len;
+						sta = &wil->sta[cid];
 
-						wil_tx_latency_calc(wil, skb,
-							&wil->sta[cid]);
+						wil_tx_latency_calc_edma(wil,
+									 skb,
+									 sta,
+									 &msg);
 					}
 				} else {
 					ndev->stats.tx_errors++;

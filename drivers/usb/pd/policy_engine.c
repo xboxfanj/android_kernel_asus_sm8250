@@ -289,7 +289,7 @@ static void *usbpd_ipc_log;
 #endif
 
 #define PD_SRC_CAP_EXT_DB_LEN	24
-#define PD_STATUS_DB_LEN	5
+#define PD_STATUS_DB_LEN	6
 #define PD_BATTERY_CAP_DB_LEN	9
 
 #define PD_MAX_EXT_MSG_LEN		260
@@ -398,6 +398,10 @@ static void *usbpd_ipc_log;
 #define ASUS_VID	0x0B05
 #define	GETFW		0x01
 #define	GETFW_ACK	0x02
+
+/* params for usb_blocking_sync */
+#define STOP_USB_HOST		0
+#define START_USB_HOST		1
 
 #ifndef CONFIG_ASUS_PD_CHARGER
 #define PD_MIN_SINK_CURRENT	900
@@ -562,6 +566,7 @@ struct usbpd {
 	bool			send_get_battery_status;
 	u32			battery_sts_dobj;
 	int 			vendor_id;
+	bool			typec_analog_audio_connected;
 };
 
 
@@ -648,7 +653,7 @@ static inline void start_usb_host(struct usbpd *pd, bool ss)
 	extcon_set_state_sync(pd->extcon, EXTCON_USB_HOST, 1);
 
 	/* blocks until USB host is completely started */
-	ret = extcon_blocking_sync(pd->extcon, EXTCON_USB_HOST, 1);
+	ret = extcon_blocking_sync(pd->extcon, EXTCON_USB_HOST, START_USB_HOST);
 	if (ret) {
 		usbpd_err(&pd->dev, "err(%d) starting host", ret);
 		return;
@@ -751,7 +756,7 @@ static int usbpd_release_ss_lane(struct usbpd *pd,
 	stop_usb_host(pd);
 
 	/* blocks until USB host is completely stopped */
-	ret = extcon_blocking_sync(pd->extcon, EXTCON_USB_HOST, 0);
+	ret = extcon_blocking_sync(pd->extcon, EXTCON_USB_HOST, STOP_USB_HOST);
 	if (ret) {
 		usbpd_err(&pd->dev, "err(%d) stopping host", ret);
 		goto err_exit;
@@ -828,6 +833,7 @@ static inline void pd_reset_protocol(struct usbpd *pd)
 	memset(pd->rx_msgid, -1, sizeof(pd->rx_msgid));
 	memset(pd->tx_msgid, 0, sizeof(pd->tx_msgid));
 	pd->send_request = false;
+	pd->send_get_status = false;
 	pd->send_pr_swap = false;
 	pd->send_dr_swap = false;
 }
@@ -1570,10 +1576,12 @@ int usbpd_send_svdm(struct usbpd *pd, u16 svid, u8 cmd,
 		enum usbpd_svdm_cmd_type cmd_type, int obj_pos,
 		const u32 *vdos, int num_vdos)
 {
-	u32 svdm_hdr = SVDM_HDR(svid, 0, obj_pos, cmd_type, cmd);
+	u32 svdm_hdr = SVDM_HDR(svid, pd->spec_rev == USBPD_REV_30 ? 1 : 0,
+			obj_pos, cmd_type, cmd);
 
-	usbpd_dbg(&pd->dev, "VDM tx: svid:%x cmd:%x cmd_type:%x svdm_hdr:%x\n",
-			svid, cmd, cmd_type, svdm_hdr);
+	usbpd_dbg(&pd->dev, "VDM tx: svid:%04x ver:%d obj_pos:%d cmd:%x cmd_type:%x svdm_hdr:%x\n",
+			svid, pd->spec_rev == USBPD_REV_30 ? 1 : 0, obj_pos,
+			cmd, cmd_type, svdm_hdr);
 
 	return usbpd_send_vdm(pd, svdm_hdr, vdos, num_vdos);
 }
@@ -1858,7 +1866,7 @@ static void handle_vdm_rx(struct usbpd *pd, struct rx_msg *rx_msg)
 	ktime_t recvd_time = ktime_get();
 
 	usbpd_dbg(&pd->dev,
-			"VDM rx: svid:%x cmd:%x cmd_type:%x vdm_hdr:%x has_dp: %s\n",
+			"VDM rx: svid:%04x cmd:%x cmd_type:%x vdm_hdr:%x has_dp: %s\n",
 			svid, cmd, cmd_type, vdm_hdr,
 			pd->has_dp ? "true" : "false");
 
@@ -1893,11 +1901,9 @@ static void handle_vdm_rx(struct usbpd *pd, struct rx_msg *rx_msg)
 		return;
 	}
 
-	if (SVDM_HDR_VER(vdm_hdr) > 1) {
-		usbpd_dbg(&pd->dev, "Discarding SVDM with incorrect version:%d\n",
+	if (SVDM_HDR_VER(vdm_hdr) > 1)
+		usbpd_dbg(&pd->dev, "Received SVDM with unsupported version:%d\n",
 				SVDM_HDR_VER(vdm_hdr));
-		return;
-	}
 
 	if (cmd_type != SVDM_CMD_TYPE_INITIATOR &&
 			pd->current_state != PE_SRC_STARTUP_WAIT_FOR_VDM_RESP)
@@ -2223,7 +2229,8 @@ static void dr_swap(struct usbpd *pd)
 		typec_set_data_role(pd->typec_port, TYPEC_HOST);
 
 		/* ensure host is started before allowing DP */
-		extcon_blocking_sync(pd->extcon, EXTCON_USB_HOST, 0);
+		extcon_blocking_sync(pd->extcon, EXTCON_USB_HOST,
+					START_USB_HOST);
 
 		usbpd_send_svdm(pd, USBPD_SID, USBPD_SVDM_DISCOVER_IDENTITY,
 				SVDM_CMD_TYPE_INITIATOR, 0, NULL, 0);
@@ -3479,13 +3486,15 @@ static bool handle_ext_snk_ready(struct usbpd *pd, struct rx_msg *rx_msg)
 		complete(&pd->is_ready);
 		break;
 	case MSG_STATUS:
-		if (rx_msg->data_len != PD_STATUS_DB_LEN) {
-			usbpd_err(&pd->dev, "Invalid status db\n");
-			break;
-		}
+		if (rx_msg->data_len > PD_STATUS_DB_LEN)
+			usbpd_err(&pd->dev, "Invalid status db length:%d\n",
+					rx_msg->data_len);
+
+		memset(&pd->status_db, 0, sizeof(pd->status_db));
 		memcpy(&pd->status_db, rx_msg->payload,
-			sizeof(pd->status_db));
+			min((size_t)rx_msg->data_len, sizeof(pd->status_db)));
 		kobject_uevent(&pd->dev.kobj, KOBJ_CHANGE);
+		complete(&pd->is_ready);
 		break;
 	case MSG_BATTERY_CAPABILITIES:
 		if (rx_msg->data_len != PD_BATTERY_CAP_DB_LEN) {
@@ -4024,6 +4033,7 @@ static void handle_disconnect(struct usbpd *pd)
 	pd->forced_pr = POWER_SUPPLY_TYPEC_PR_NONE;
 
 	pd->current_state = PE_UNKNOWN;
+	pd_reset_protocol(pd);
 
 	kobject_uevent(&pd->dev.kobj, KOBJ_CHANGE);
 	typec_unregister_partner(pd->partner);
@@ -4131,6 +4141,18 @@ static void usbpd_sm(struct work_struct *w)
 	usbpd_dbg(&pd->dev, "handle state %s\n",
 			usbpd_state_strings[pd->current_state]);
 
+	/* Register typec partner in case AAA is connected */
+	if (pd->typec_mode == POWER_SUPPLY_TYPEC_SINK_AUDIO_ADAPTER) {
+		if (!pd->partner) {
+			memset(&pd->partner_identity, 0,
+					sizeof(pd->partner_identity));
+			pd->partner_desc.usb_pd = false;
+			pd->partner_desc.accessory = TYPEC_ACCESSORY_AUDIO;
+			pd->partner = typec_register_partner(pd->typec_port,
+							&pd->partner_desc);
+			pd->typec_analog_audio_connected = true;
+		}
+	}
 	hrtimer_cancel(&pd->timer);
 	pd->sm_queued = false;
 
@@ -4144,9 +4166,18 @@ static void usbpd_sm(struct work_struct *w)
 	/* Disconnect? */
 	if (pd->current_pr == PR_NONE) {
 		if (pd->current_state == PE_UNKNOWN &&
-				pd->current_dr == DR_NONE)
-			goto sm_done;
+				pd->current_dr == DR_NONE) {
+			/*
+			 * Since PD stack will not be loaded in case AAA is
+			 * connected, call disconnect to unregister typec
+			 * partner
+			 */
+			if (!pd->typec_analog_audio_connected &&
+					pd->partner)
+				handle_disconnect(pd);
 
+			goto sm_done;
+		}
 		handle_disconnect(pd);
 		goto sm_done;
 	}
@@ -4216,6 +4247,7 @@ static int usbpd_process_typec_mode(struct usbpd *pd,
 		}
 
 		pd->current_pr = PR_NONE;
+		pd->typec_analog_audio_connected = false;
 		break;
 
 	/* Sink states */
@@ -4605,9 +4637,9 @@ static int usbpd_uevent(struct device *dev, struct kobj_uevent_env *env)
 				"explicit" : "implicit");
 	add_uevent_var(env, "ALT_MODE=%d", pd->vdm_state == MODE_ENTERED);
 
-	add_uevent_var(env, "SDB=%02x %02x %02x %02x %02x", pd->status_db[0],
-			pd->status_db[1], pd->status_db[2], pd->status_db[3],
-			pd->status_db[4]);
+	add_uevent_var(env, "SDB=%02x %02x %02x %02x %02x %02x",
+			pd->status_db[0], pd->status_db[1], pd->status_db[2],
+			pd->status_db[3], pd->status_db[4], pd->status_db[5]);
 
 	return 0;
 }
