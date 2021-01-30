@@ -4685,7 +4685,7 @@ static int dwc3_usb_blocking_sync(struct notifier_block *nb,
 		/* if ogt state in the undefine can ignore pm runtime suspsned */
 		if (mdwc->drd_state == DRD_STATE_UNDEFINED) {
 			dev_info(mdwc->dev, " %s otg undefine\n", __func__);
-			return ret;
+			return 0;
 		}
 
 	if (!time_before(jiffies, timeout_ms))
